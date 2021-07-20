@@ -1,1 +1,1 @@
-# SFace-jittor
+# jittorface

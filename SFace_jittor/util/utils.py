@@ -2,13 +2,13 @@ import jittor as jt
 from jittor import transform
 
 from .verification import evaluate
+from image_iter import ValDataset
 
 from datetime import datetime
 import matplotlib.pyplot as plt
 plt.switch_backend('agg')
 import numpy as np
 from PIL import Image
-import mxnet as mx
 import io
 import os, pickle, sklearn
 import time
@@ -18,41 +18,25 @@ def get_time():
     return (str(datetime.now())[:-10]).replace(' ', '-').replace(':', '-')
 
 
-def load_bin(path, image_size=[112,112]):
+def load_bin(path, batch_size, image_size=[112,112]):
     bins, issame_list = pickle.load(open(path, 'rb'), encoding='bytes')
-    data_list = []
-    for flip in [0,1]:
-        data = jt.zeros((len(issame_list)*2, 3, image_size[0], image_size[1]))
-        data_list.append(data)
-    for i in range(len(issame_list)*2):
-        _bin = bins[i]
-        img = mx.image.imdecode(_bin)
-        if img.shape[1]!=image_size[0]:
-            img = mx.image.resize_short(img, image_size[0])
-        img = mx.nd.transpose(img, axes=(2, 0, 1))
-        for flip in [0,1]:
-            if flip==1:
-                img = mx.ndarray.flip(data=img, axis=2)
-            data_list[flip][i] = jt.array(img.asnumpy())
-        if i%1000==0:
-            print('loading bin', i)
-    print(data_list[0].shape)
-    return data_list, issame_list
+    data_loader = ValDataset(bins, issame_list, batch_size, image_size=image_size)
+    return data_loader, issame_list
 
 
-def get_val_pair(path, name):
+def get_val_pair(path, name, batch_size):
     ver_path = os.path.join(path,name+".bin")
     assert os.path.exists(ver_path)
-    data_set, issame = load_bin(ver_path)
+    data_set, issame = load_bin(ver_path, batch_size)
     print('ver', name)
     return data_set, issame
 
 
-def get_val_data(data_path, targets):
+def get_val_data(data_path, targets, batch_size):
     assert len(targets) > 0
     vers = []
     for t in targets:
-        data_set, issame = get_val_pair(data_path, t)
+        data_set, issame = get_val_pair(data_path, t, batch_size)
         vers.append([t, data_set, issame])
     return vers
 
@@ -106,38 +90,40 @@ def gen_plot(fpr, tpr):
     return buf
 
 
-def perform_val(embedding_size, batch_size, backbone, data_set, issame, nrof_folds = 10):
+def perform_val(embedding_size, batch_size, backbone, data_set, issame, nrof_folds=10):
     backbone.eval() # switch to evaluation mode
 
-    embeddings_list = []
-    for carray in data_set:
-        idx = 0
-        embeddings = np.zeros([len(carray), embedding_size])
-        with jt.no_grad():
-            while idx + batch_size <= len(carray):
-                batch = carray[idx:idx + batch_size]
-                output = backbone(batch)
-                embeddings[idx:idx + batch_size] = output.detach().data
-                idx += batch_size
-            if idx < len(carray):
-                batch = carray[idx:]
-                output = backbone(batch)
-                embeddings[idx:] = output.detach().data
-        embeddings_list.append(embeddings)
+    embeddings_jt = jt.zeros([len(data_set), embedding_size])
+    embeddings_jt_flip = jt.zeros([len(data_set), embedding_size])
+    with jt.no_grad():
+        for i, (batch, batch_flip) in enumerate(data_set):
+            output = backbone(batch)
+            output_flip = backbone(batch_flip)
+            bs_single = batch.shape[0]
+            embeddings_jt[i*batch_size+jt.rank*bs_single:i*batch_size+(jt.rank+1)*bs_single] = output.detach()
+            embeddings_jt_flip[i*batch_size+jt.rank*bs_single:i*batch_size+(jt.rank+1)*bs_single] = output_flip.detach()
+            embeddings_jt.sync()
+            embeddings_jt_flip.sync()
+
+    if jt.in_mpi:
+        embeddings_jt = embeddings_jt.mpi_all_reduce('add')
+        embeddings_jt_flip = embeddings_jt_flip.mpi_all_reduce('add')
+    embeddings_list = [embeddings_jt.data, embeddings_jt_flip.data]
 
     _xnorm = 0.0
     _xnorm_cnt = 0
     for embed in embeddings_list:
         for i in range(embed.shape[0]):
             _em = embed[i]
-            _norm=np.linalg.norm(_em)
-            _xnorm+=_norm
-            _xnorm_cnt+=1
+            _norm = np.linalg.norm(_em)
+            _xnorm += _norm
+            _xnorm_cnt += 1
     _xnorm /= _xnorm_cnt
 
     embeddings = embeddings_list[0] + embeddings_list[1]
     embeddings = sklearn.preprocessing.normalize(embeddings)
-    print(embeddings.shape)
+    if jt.rank == 0:
+        print(embeddings.shape)
 
     tpr, fpr, accuracy, best_thresholds = evaluate(embeddings, issame, nrof_folds)
     buf = gen_plot(fpr, tpr)

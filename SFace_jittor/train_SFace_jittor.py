@@ -7,7 +7,7 @@ import jittor.optim as optim
 from jittor import nn, init
 
 from config import get_config
-from image_iter_jpg import FaceDataset
+from image_iter import FaceDataset
 from backbone.model_irse import IR_50, IR_101
 from backbone.model_mobilefacenet import MobileFaceNet
 from head.metrics import SFaceLoss
@@ -90,7 +90,7 @@ if __name__ == '__main__':
     parser.add_argument('--data_mode', help="use which database, [casia, vgg, ms1m, retina, ms1mr]",default='casia', type=str)
     parser.add_argument('--net', help="which network, ['IR_50', 'IR_101', 'MobileFaceNet']",default='IR_50', type=str)
     parser.add_argument('--head', help="head type, ['SFaceLoss']", default='SFaceLoss', type=str)
-    parser.add_argument('--target', help="verification targets", default='lfw,talfw,sllfw,calfw,cplfw,cfp_fp,agedb_30', type=str)
+    parser.add_argument('--target', help="verification targets", default='lfw,calfw,cplfw,cfp_fp,agedb_30', type=str)
     parser.add_argument('--resume_backbone', help="resume backbone model", default='', type=str)
     parser.add_argument('--resume_head', help="resume head model", default='', type=str)
     parser.add_argument('--outdir', help="output dir", default='test_dir', type=str)
@@ -155,7 +155,7 @@ if __name__ == '__main__':
     trainloader = FaceDataset(DATA_ROOT, rand_mirror=True, batch_size=BATCH_SIZE,
                               shuffle=True, drop_last=True, num_workers=gpu_nums)
 
-    vers = get_val_data(EVAL_PATH, TARGET)
+    vers = get_val_data(EVAL_PATH, TARGET, BATCH_SIZE)
     highest_acc = [0.0 for t in TARGET]
 
 
@@ -215,7 +215,7 @@ if __name__ == '__main__':
 
     #======= train & validation & save checkpoint =======#
     DISP_FREQ = 20 # frequency to display training loss & acc
-    VER_FREQ = int(2000 * 256 / BATCH_SIZE)
+    VER_FREQ = 2000
     batch = 0  # batch index
 
     BACKBONE.train()  # set to training mode

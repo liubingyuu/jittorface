@@ -80,6 +80,7 @@ def need_save(acc, highest_acc):
     print("highest_acc:", highest_acc)
     return do_save
 
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='for face verification')
     parser.add_argument('--workers_id', help="gpu ids or cpu", default='cpu', type=str)
